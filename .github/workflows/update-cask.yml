@@ -1,13 +1,14 @@
 name: Update Cask
 
 on:
-  repository_dispatch:
-    types: [release-published]
+  schedule:
+    # Check for new releases every 6 hours
+    - cron: "0 */6 * * *"
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to update to (e.g., 0.7.0)"
-        required: true
+        description: "Version to update to (e.g., 0.8.0)"
+        required: false
         type: string
 
 permissions:
@@ -21,37 +22,58 @@ jobs:
       - name: Checkout tap repository
         uses: actions/checkout@v4
 
-      - name: Determine version
-        id: version
+      - name: Get latest release version
+        id: latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          if [ -n "${{ github.event.inputs.version }}" ]; then
             echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
           else
-            VERSION="${{ github.event.client_payload.version }}"
-            echo "version=${VERSION#v}" >> "$GITHUB_OUTPUT"
+            # Fetch latest release tag from zosma-cowork (public repo, no token needed for public API)
+            TAG=$(curl -sL "https://api.github.com/repos/zosmaai/zosma-cowork/releases/latest" | \
+              python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('tag_name','').lstrip('v'))" 2>/dev/null || echo "")
+            if [ -z "$TAG" ]; then
+              echo "Failed to fetch latest release"
+              exit 1
+            fi
+            echo "version=$TAG" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Check current cask version
+        id: current
+        run: |
+          CURRENT=$(grep -E "^  version" Casks/zosma-cowork.rb | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "Current cask version: $CURRENT"
+
+      - name: Skip if same version
+        if: steps.latest.outputs.version == steps.current.outputs.version && github.event_name != 'workflow_dispatch'
+        run: |
+          echo "Cask is already at version ${{ steps.latest.outputs.version }}. Nothing to update."
+          exit 0
 
       - name: Download and checksum ARM64 DMG
         id: sha-arm
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ steps.latest.outputs.version }}
         run: |
           curl -sL -o zosma-cowork-arm64.dmg \
-            "https://github.com/zosmaai/zosma-cowork/releases/download/v${VERSION}/Zosma.Cowork_${VERSION}_aarch64.dmg"
+            "https://github.com/zosmaai/zosma-cowork/releases/download/v${VERSION}/zosma-cowork_${VERSION}_aarch64.dmg"
           echo "sha256=$(shasum -a 256 zosma-cowork-arm64.dmg | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
 
       - name: Download and checksum Intel DMG
         id: sha-intel
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ steps.latest.outputs.version }}
         run: |
           curl -sL -o zosma-cowork-x64.dmg \
-            "https://github.com/zosmaai/zosma-cowork/releases/download/v${VERSION}/Zosma.Cowork_${VERSION}_x64.dmg"
+            "https://github.com/zosmaai/zosma-cowork/releases/download/v${VERSION}/zosma-cowork_${VERSION}_x64.dmg"
           echo "sha256=$(shasum -a 256 zosma-cowork-x64.dmg | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
 
       - name: Update Cask formula
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ steps.latest.outputs.version }}
           SHA256_ARM: ${{ steps.sha-arm.outputs.sha256 }}
           SHA256_INTEL: ${{ steps.sha-intel.outputs.sha256 }}
         run: |
@@ -69,7 +91,7 @@ jobs:
 
       - name: Commit and push
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
+          VERSION="${{ steps.latest.outputs.version }}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Casks/zosma-cowork.rb
