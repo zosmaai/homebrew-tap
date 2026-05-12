@@ -1,0 +1,78 @@
+name: Update Cask
+
+on:
+  repository_dispatch:
+    types: [release-published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to update to (e.g., 0.7.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  update-cask:
+    name: Update Cask Formula
+    runs-on: macos-14
+    steps:
+      - name: Checkout tap repository
+        uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            VERSION="${{ github.event.client_payload.version }}"
+            echo "version=${VERSION#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download and checksum ARM64 DMG
+        id: sha-arm
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          curl -sL -o zosma-cowork-arm64.dmg \
+            "https://github.com/zosmaai/zosma-cowork/releases/download/v${VERSION}/Zosma.Cowork_${VERSION}_aarch64.dmg"
+          echo "sha256=$(shasum -a 256 zosma-cowork-arm64.dmg | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+
+      - name: Download and checksum Intel DMG
+        id: sha-intel
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          curl -sL -o zosma-cowork-x64.dmg \
+            "https://github.com/zosmaai/zosma-cowork/releases/download/v${VERSION}/Zosma.Cowork_${VERSION}_x64.dmg"
+          echo "sha256=$(shasum -a 256 zosma-cowork-x64.dmg | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+
+      - name: Update Cask formula
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA256_ARM: ${{ steps.sha-arm.outputs.sha256 }}
+          SHA256_INTEL: ${{ steps.sha-intel.outputs.sha256 }}
+        run: |
+          CASK_FILE="Casks/zosma-cowork.rb"
+
+          # Update version line
+          sed -i '' "s/^  version \".*\"/  version \"${VERSION}\"/" "$CASK_FILE"
+
+          # Update SHA256 lines (multi-arch format)
+          sed -i '' "s/arm:.*/arm:   \"${SHA256_ARM}\",/" "$CASK_FILE"
+          sed -i '' "s/intel:.*/intel: \"${SHA256_INTEL}\"/" "$CASK_FILE"
+
+          echo "Updated Cask to version ${VERSION}"
+          grep -E "version|sha256" "$CASK_FILE"
+
+      - name: Commit and push
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/zosma-cowork.rb
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "bump zosma-cowork to ${VERSION}"
+          git push
