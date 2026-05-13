@@ -2,7 +2,6 @@ name: Update Cask
 
 on:
   schedule:
-    # Check for new releases every 6 hours
     - cron: "0 */6 * * *"
   workflow_dispatch:
     inputs:
@@ -31,7 +30,7 @@ jobs:
             echo "value=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
           else
             TAG=$(curl -sL "https://api.github.com/repos/zosmaai/zosma-cowork/releases/latest" | \
-              python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('tag_name','').lstrip('v'))" 2>/dev/null || echo "")
+              python3 -c "import json,sys;d=json.load(sys.stdin);print(d.get('tag_name','').lstrip('v'))" 2>/dev/null || echo "")
             if [ -z "$TAG" ]; then
               echo "Failed to fetch latest release"
               exit 1
@@ -58,14 +57,10 @@ jobs:
           VERSION: ${{ steps.version.outputs.value }}
         run: |
           ASSETS_JSON=$(curl -sL "https://api.github.com/repos/zosmaai/zosma-cowork/releases/tags/v${VERSION}")
+          PYCMD='import json,sys;a=json.load(sys.stdin).get("assets",[]);d=[n for n in [x["name"] for x in a] if n.endswith(".dmg")'
 
           # Find ARM DMG
-          ARM_DMG=$(echo "$ASSETS_JSON" | python3 -c "
-import json, sys
-assets = json.load(sys.stdin).get('assets', [])
-dmg = [a['name'] for a in assets if a['name'].endswith('.dmg') and ('aarch64' in a['name'] or 'arm64' in a['name'])]
-print(dmg[0] if dmg else '')
-")
+          ARM_DMG=$(echo "$ASSETS_JSON" | python3 -c "${PYCMD} and (\"aarch64\" in n or \"arm64\" in n)];print(d[0] if d else \"\")")
           echo "arm_dmg=$ARM_DMG" >> "$GITHUB_OUTPUT"
 
           if [ -n "$ARM_DMG" ]; then
@@ -80,12 +75,7 @@ print(dmg[0] if dmg else '')
           fi
 
           # Find Intel DMG
-          INTEL_DMG=$(echo "$ASSETS_JSON" | python3 -c "
-import json, sys
-assets = json.load(sys.stdin).get('assets', [])
-dmg = [a['name'] for a in assets if a['name'].endswith('.dmg') and ('x64' in a['name'] or 'amd64' in a['name'] or 'intel' in a['name'].lower())]
-print(dmg[0] if dmg else '')
-")
+          INTEL_DMG=$(echo "$ASSETS_JSON" | python3 -c "${PYCMD} and (\"x64\" in n or \"amd64\" in n or \"intel\" in n.lower())];print(d[0] if d else \"\")")
           echo "intel_dmg=$INTEL_DMG" >> "$GITHUB_OUTPUT"
 
           if [ -n "$INTEL_DMG" ]; then
@@ -113,68 +103,13 @@ print(dmg[0] if dmg else '')
           SHA256_ARM: ${{ steps.dmg.outputs.arm_sha256 }}
           SHA256_INTEL: ${{ steps.dmg.outputs.intel_sha256 }}
         run: |
-          python3 << 'PYEOF'
-import os, re
-
-version = os.environ.get('VERSION', '')
-arm_dmg = os.environ.get('ARM_DMG', '')
-intel_dmg = os.environ.get('INTEL_DMG', '')
-sha256_arm = os.environ.get('SHA256_ARM', '')
-sha256_intel = os.environ.get('SHA256_INTEL', '')
-
-cask_file = 'Casks/zosma-cowork.rb'
-
-with open(cask_file) as f:
-    content = f.read()
-
-# Update version
-content = re.sub(r'^  version ".*"', f'  version "{version}"', content, count=1)
-
-# Build URL template from the primary DMG name
-primary_dmg = arm_dmg or intel_dmg
-# Replace the actual version with #{version} in the DMG filename
-url_filename = primary_dmg.replace(version, '#{version}')
-# Update the URL
-content = re.sub(
-    r'(/download/v)\#\{version\}/[^")\s]+',
-    rf'\1#{{version}}/{url_filename}',
-    content,
-    count=1
-)
-
-# Update SHA256
-if sha256_arm and sha256_intel:
-    # Multi-arch
-    content = re.sub(
-        r'  sha256 arm:.*',
-        f'  sha256 arm:   "{sha256_arm}",',
-        content
-    )
-    content = re.sub(
-        r'         intel:.*',
-        f'         intel: "{sha256_intel}"',
-        content
-    )
-elif sha256_arm:
-    # ARM only — rewrite to single sha256
-    # Remove intel line if present
-    content = re.sub(r'^         intel:.*\n?', '', content, flags=re.MULTILINE)
-    # Replace arm: line with flat sha256
-    content = re.sub(
-        r'  sha256 arm:.*',
-        f'  sha256 "{sha256_arm}"',
-        content
-    )
-
-with open(cask_file, 'w') as f:
-    f.write(content)
-
-print(f"Updated Cask to version {version}")
-# Show key lines
-for line in content.split('\n'):
-    if any(x in line for x in ['version', 'sha256', 'url ']):
-        print(f"  {line.strip()}")
-PYEOF
+          python3 .github/scripts/update-cask.py \
+            "Casks/zosma-cowork.rb" \
+            "$VERSION" \
+            "$ARM_DMG" \
+            "$INTEL_DMG" \
+            "$SHA256_ARM" \
+            "$SHA256_INTEL"
 
       - name: Commit and push
         run: |
