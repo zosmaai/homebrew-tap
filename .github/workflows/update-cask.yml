@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to update to (e.g., 0.8.0)"
+        description: "Version to update to (e.g., 0.8.6)"
         required: false
         type: string
 
@@ -22,76 +22,163 @@ jobs:
       - name: Checkout tap repository
         uses: actions/checkout@v4
 
-      - name: Get latest release version
-        id: latest
+      - name: Get target version
+        id: version
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ -n "${{ github.event.inputs.version }}" ]; then
-            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "value=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
           else
-            # Fetch latest release tag from zosma-cowork (public repo, no token needed for public API)
             TAG=$(curl -sL "https://api.github.com/repos/zosmaai/zosma-cowork/releases/latest" | \
               python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('tag_name','').lstrip('v'))" 2>/dev/null || echo "")
             if [ -z "$TAG" ]; then
               echo "Failed to fetch latest release"
               exit 1
             fi
-            echo "version=$TAG" >> "$GITHUB_OUTPUT"
+            echo "value=$TAG" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Check current cask version
         id: current
         run: |
           CURRENT=$(grep -E "^  version" Casks/zosma-cowork.rb | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          echo "value=$CURRENT" >> "$GITHUB_OUTPUT"
           echo "Current cask version: $CURRENT"
 
       - name: Skip if same version
-        if: steps.latest.outputs.version == steps.current.outputs.version && github.event_name != 'workflow_dispatch'
+        if: steps.version.outputs.value == steps.current.outputs.value && github.event_name != 'workflow_dispatch'
         run: |
-          echo "Cask is already at version ${{ steps.latest.outputs.version }}. Nothing to update."
+          echo "Cask is already at version ${{ steps.version.outputs.value }}. Nothing to update."
           exit 0
 
-      - name: Download and checksum ARM64 DMG
-        id: sha-arm
+      - name: Find and download DMG assets
+        id: dmg
         env:
-          VERSION: ${{ steps.latest.outputs.version }}
+          VERSION: ${{ steps.version.outputs.value }}
         run: |
-          curl -sL -o zosma-cowork-arm64.dmg \
-            "https://github.com/zosmaai/zosma-cowork/releases/download/v${VERSION}/zosma-cowork_${VERSION}_aarch64.dmg"
-          echo "sha256=$(shasum -a 256 zosma-cowork-arm64.dmg | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          ASSETS_JSON=$(curl -sL "https://api.github.com/repos/zosmaai/zosma-cowork/releases/tags/v${VERSION}")
 
-      - name: Download and checksum Intel DMG
-        id: sha-intel
-        env:
-          VERSION: ${{ steps.latest.outputs.version }}
+          # Find ARM DMG
+          ARM_DMG=$(echo "$ASSETS_JSON" | python3 -c "
+import json, sys
+assets = json.load(sys.stdin).get('assets', [])
+dmg = [a['name'] for a in assets if a['name'].endswith('.dmg') and ('aarch64' in a['name'] or 'arm64' in a['name'])]
+print(dmg[0] if dmg else '')
+")
+          echo "arm_dmg=$ARM_DMG" >> "$GITHUB_OUTPUT"
+
+          if [ -n "$ARM_DMG" ]; then
+            echo "Downloading ARM DMG: $ARM_DMG"
+            curl -sL -o zosma-cowork-arm64.dmg \
+              "https://github.com/zosmaai/zosma-cowork/releases/download/v${VERSION}/${ARM_DMG}"
+            SHA256_ARM=$(shasum -a 256 zosma-cowork-arm64.dmg | cut -d ' ' -f 1)
+            echo "arm_sha256=$SHA256_ARM" >> "$GITHUB_OUTPUT"
+            echo "ARM SHA256: $SHA256_ARM"
+          else
+            echo "No ARM DMG found in release v${VERSION}"
+          fi
+
+          # Find Intel DMG
+          INTEL_DMG=$(echo "$ASSETS_JSON" | python3 -c "
+import json, sys
+assets = json.load(sys.stdin).get('assets', [])
+dmg = [a['name'] for a in assets if a['name'].endswith('.dmg') and ('x64' in a['name'] or 'amd64' in a['name'] or 'intel' in a['name'].lower())]
+print(dmg[0] if dmg else '')
+")
+          echo "intel_dmg=$INTEL_DMG" >> "$GITHUB_OUTPUT"
+
+          if [ -n "$INTEL_DMG" ]; then
+            echo "Downloading Intel DMG: $INTEL_DMG"
+            curl -sL -o zosma-cowork-x64.dmg \
+              "https://github.com/zosmaai/zosma-cowork/releases/download/v${VERSION}/${INTEL_DMG}"
+            SHA256_INTEL=$(shasum -a 256 zosma-cowork-x64.dmg | cut -d ' ' -f 1)
+            echo "intel_sha256=$SHA256_INTEL" >> "$GITHUB_OUTPUT"
+            echo "Intel SHA256: $SHA256_INTEL"
+          else
+            echo "No Intel DMG found in release v${VERSION}"
+          fi
+
+      - name: Abort if no DMG found
+        if: steps.dmg.outputs.arm_dmg == '' && steps.dmg.outputs.intel_dmg == ''
         run: |
-          curl -sL -o zosma-cowork-x64.dmg \
-            "https://github.com/zosmaai/zosma-cowork/releases/download/v${VERSION}/zosma-cowork_${VERSION}_x64.dmg"
-          echo "sha256=$(shasum -a 256 zosma-cowork-x64.dmg | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          echo "No DMG assets found in release v${{ steps.version.outputs.value }}. Aborting."
+          exit 1
 
       - name: Update Cask formula
         env:
-          VERSION: ${{ steps.latest.outputs.version }}
-          SHA256_ARM: ${{ steps.sha-arm.outputs.sha256 }}
-          SHA256_INTEL: ${{ steps.sha-intel.outputs.sha256 }}
+          VERSION: ${{ steps.version.outputs.value }}
+          ARM_DMG: ${{ steps.dmg.outputs.arm_dmg }}
+          INTEL_DMG: ${{ steps.dmg.outputs.intel_dmg }}
+          SHA256_ARM: ${{ steps.dmg.outputs.arm_sha256 }}
+          SHA256_INTEL: ${{ steps.dmg.outputs.intel_sha256 }}
         run: |
-          CASK_FILE="Casks/zosma-cowork.rb"
+          python3 << 'PYEOF'
+import os, re
 
-          # Update version line
-          sed -i '' "s/^  version \".*\"/  version \"${VERSION}\"/" "$CASK_FILE"
+version = os.environ.get('VERSION', '')
+arm_dmg = os.environ.get('ARM_DMG', '')
+intel_dmg = os.environ.get('INTEL_DMG', '')
+sha256_arm = os.environ.get('SHA256_ARM', '')
+sha256_intel = os.environ.get('SHA256_INTEL', '')
 
-          # Update SHA256 lines (multi-arch format)
-          sed -i '' "s/arm:.*/arm:   \"${SHA256_ARM}\",/" "$CASK_FILE"
-          sed -i '' "s/intel:.*/intel: \"${SHA256_INTEL}\"/" "$CASK_FILE"
+cask_file = 'Casks/zosma-cowork.rb'
 
-          echo "Updated Cask to version ${VERSION}"
-          grep -E "version|sha256" "$CASK_FILE"
+with open(cask_file) as f:
+    content = f.read()
+
+# Update version
+content = re.sub(r'^  version ".*"', f'  version "{version}"', content, count=1)
+
+# Build URL template from the primary DMG name
+primary_dmg = arm_dmg or intel_dmg
+# Replace the actual version with #{version} in the DMG filename
+url_filename = primary_dmg.replace(version, '#{version}')
+# Update the URL
+content = re.sub(
+    r'(/download/v)\#\{version\}/[^")\s]+',
+    rf'\1#{{version}}/{url_filename}',
+    content,
+    count=1
+)
+
+# Update SHA256
+if sha256_arm and sha256_intel:
+    # Multi-arch
+    content = re.sub(
+        r'  sha256 arm:.*',
+        f'  sha256 arm:   "{sha256_arm}",',
+        content
+    )
+    content = re.sub(
+        r'         intel:.*',
+        f'         intel: "{sha256_intel}"',
+        content
+    )
+elif sha256_arm:
+    # ARM only — rewrite to single sha256
+    # Remove intel line if present
+    content = re.sub(r'^         intel:.*\n?', '', content, flags=re.MULTILINE)
+    # Replace arm: line with flat sha256
+    content = re.sub(
+        r'  sha256 arm:.*',
+        f'  sha256 "{sha256_arm}"',
+        content
+    )
+
+with open(cask_file, 'w') as f:
+    f.write(content)
+
+print(f"Updated Cask to version {version}")
+# Show key lines
+for line in content.split('\n'):
+    if any(x in line for x in ['version', 'sha256', 'url ']):
+        print(f"  {line.strip()}")
+PYEOF
 
       - name: Commit and push
         run: |
-          VERSION="${{ steps.latest.outputs.version }}"
+          VERSION="${{ steps.version.outputs.value }}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Casks/zosma-cowork.rb
