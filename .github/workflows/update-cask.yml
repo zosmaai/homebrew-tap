@@ -55,8 +55,12 @@ jobs:
         id: dmg
         env:
           VERSION: ${{ steps.version.outputs.value }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          ASSETS_JSON=$(curl -sL "https://api.github.com/repos/zosmaai/zosma-cowork/releases/tags/v${VERSION}")
+          ASSETS_JSON=$(curl -sL -H "Authorization: Bearer ${GH_TOKEN}" \
+            "https://api.github.com/repos/zosmaai/zosma-cowork/releases/tags/v${VERSION}")
+          # Debug: show first API response key to verify auth worked
+          echo "API keys: $(echo "$ASSETS_JSON" | python3 -c "import json,sys;print(list(json.load(sys.stdin).keys()))" 2>/dev/null || echo 'parse_failed')"
           PYCMD='import json,sys;a=json.load(sys.stdin).get("assets",[]);d=[n for n in [x["name"] for x in a] if n.endswith(".dmg")'
 
           # Find ARM DMG
