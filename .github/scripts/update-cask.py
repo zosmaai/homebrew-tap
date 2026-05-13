@@ -28,6 +28,7 @@ def main():
         f'  version "{version}"',
         content,
         count=1,
+        flags=re.MULTILINE,
     )
 
     # Build URL template from the primary DMG name
@@ -53,7 +54,7 @@ def main():
             content,
         )
     elif sha256_arm:
-        # ARM only — rewrite to single sha256
+        # ARM only — rewrite from arm:+intel: to flat sha256
         content = re.sub(r'^         intel:.*\n?', "", content, flags=re.MULTILINE)
         content = re.sub(r'  sha256 arm:.*', f'  sha256 "{sha256_arm}"', content)
 
