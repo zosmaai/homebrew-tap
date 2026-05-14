@@ -54,9 +54,15 @@ def main():
             content,
         )
     elif sha256_arm:
-        # ARM only — rewrite from arm:+intel: to flat sha256
+        # ARM-only / universal — rewrite to flat sha256
+        # Handle both dual-arch (arm:) and single-arch (flat) formats
         content = re.sub(r'^         intel:.*\n?', "", content, flags=re.MULTILINE)
-        content = re.sub(r'  sha256 arm:.*', f'  sha256 "{sha256_arm}"', content)
+        result, n = re.subn(r'  sha256 arm:.*', f'  sha256 "{sha256_arm}"', content)
+        if n == 0:
+            # Already flat format — update the existing flat sha256
+            content = re.sub(r'  sha256 ".*"', f'  sha256 "{sha256_arm}"', content)
+        else:
+            content = result
 
     with open(cask_file, "w") as f:
         f.write(content)

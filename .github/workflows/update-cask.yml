@@ -63,34 +63,51 @@ jobs:
           echo "API keys: $(echo "$ASSETS_JSON" | python3 -c "import json,sys;print(list(json.load(sys.stdin).keys()))" 2>/dev/null || echo 'parse_failed')"
           PYCMD='import json,sys;a=json.load(sys.stdin).get("assets",[]);d=[n for n in [x["name"] for x in a] if n.endswith(".dmg")'
 
-          # Find ARM DMG
-          ARM_DMG=$(echo "$ASSETS_JSON" | python3 -c "${PYCMD} and (\"aarch64\" in n or \"arm64\" in n)];print(d[0] if d else \"\")")
-          echo "arm_dmg=$ARM_DMG" >> "$GITHUB_OUTPUT"
+          # First check for universal DMG (single build for Apple Silicon + Intel)
+          UNIVERSAL_DMG=$(echo "$ASSETS_JSON" | python3 -c "${PYCMD} and (\"universal\" in n)];print(d[0] if d else \"\")")
 
-          if [ -n "$ARM_DMG" ]; then
-            echo "Downloading ARM DMG: $ARM_DMG"
-            curl -sL -o zosma-cowork-arm64.dmg \
-              "https://github.com/zosmaai/zosma-cowork/releases/download/v${VERSION}/${ARM_DMG}"
-            SHA256_ARM=$(shasum -a 256 zosma-cowork-arm64.dmg | cut -d ' ' -f 1)
-            echo "arm_sha256=$SHA256_ARM" >> "$GITHUB_OUTPUT"
-            echo "ARM SHA256: $SHA256_ARM"
+          if [ -n "$UNIVERSAL_DMG" ]; then
+            echo "Found universal DMG: $UNIVERSAL_DMG (single build for Apple Silicon + Intel)"
+            echo "arm_dmg=$UNIVERSAL_DMG" >> "$GITHUB_OUTPUT"
+
+            echo "Downloading DMG: $UNIVERSAL_DMG"
+            curl -sL -o zosma-cowork-universal.dmg \
+              "https://github.com/zosmaai/zosma-cowork/releases/download/v${VERSION}/${UNIVERSAL_DMG}"
+            SHA256_UNIVERSAL=$(shasum -a 256 zosma-cowork-universal.dmg | cut -d ' ' -f 1)
+            echo "arm_sha256=$SHA256_UNIVERSAL" >> "$GITHUB_OUTPUT"
+            echo "Universal SHA256: $SHA256_UNIVERSAL"
           else
-            echo "No ARM DMG found in release v${VERSION}"
-          fi
+            # Fall back to architecture-specific DMG detection (legacy releases)
 
-          # Find Intel DMG
-          INTEL_DMG=$(echo "$ASSETS_JSON" | python3 -c "${PYCMD} and (\"x64\" in n or \"amd64\" in n or \"intel\" in n.lower())];print(d[0] if d else \"\")")
-          echo "intel_dmg=$INTEL_DMG" >> "$GITHUB_OUTPUT"
+            # Find ARM DMG
+            ARM_DMG=$(echo "$ASSETS_JSON" | python3 -c "${PYCMD} and (\"aarch64\" in n or \"arm64\" in n)];print(d[0] if d else \"\")")
+            echo "arm_dmg=$ARM_DMG" >> "$GITHUB_OUTPUT"
 
-          if [ -n "$INTEL_DMG" ]; then
-            echo "Downloading Intel DMG: $INTEL_DMG"
-            curl -sL -o zosma-cowork-x64.dmg \
-              "https://github.com/zosmaai/zosma-cowork/releases/download/v${VERSION}/${INTEL_DMG}"
-            SHA256_INTEL=$(shasum -a 256 zosma-cowork-x64.dmg | cut -d ' ' -f 1)
-            echo "intel_sha256=$SHA256_INTEL" >> "$GITHUB_OUTPUT"
-            echo "Intel SHA256: $SHA256_INTEL"
-          else
-            echo "No Intel DMG found in release v${VERSION}"
+            if [ -n "$ARM_DMG" ]; then
+              echo "Downloading ARM DMG: $ARM_DMG"
+              curl -sL -o zosma-cowork-arm64.dmg \
+                "https://github.com/zosmaai/zosma-cowork/releases/download/v${VERSION}/${ARM_DMG}"
+              SHA256_ARM=$(shasum -a 256 zosma-cowork-arm64.dmg | cut -d ' ' -f 1)
+              echo "arm_sha256=$SHA256_ARM" >> "$GITHUB_OUTPUT"
+              echo "ARM SHA256: $SHA256_ARM"
+            else
+              echo "No ARM DMG found in release v${VERSION}"
+            fi
+
+            # Find Intel DMG
+            INTEL_DMG=$(echo "$ASSETS_JSON" | python3 -c "${PYCMD} and (\"x64\" in n or \"amd64\" in n or \"intel\" in n.lower())];print(d[0] if d else \"\")")
+            echo "intel_dmg=$INTEL_DMG" >> "$GITHUB_OUTPUT"
+
+            if [ -n "$INTEL_DMG" ]; then
+              echo "Downloading Intel DMG: $INTEL_DMG"
+              curl -sL -o zosma-cowork-x64.dmg \
+                "https://github.com/zosmaai/zosma-cowork/releases/download/v${VERSION}/${INTEL_DMG}"
+              SHA256_INTEL=$(shasum -a 256 zosma-cowork-x64.dmg | cut -d ' ' -f 1)
+              echo "intel_sha256=$SHA256_INTEL" >> "$GITHUB_OUTPUT"
+              echo "Intel SHA256: $SHA256_INTEL"
+            else
+              echo "No Intel DMG found in release v${VERSION}"
+            fi
           fi
 
       - name: Abort if no DMG found
