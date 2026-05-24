@@ -29,7 +29,7 @@ jobs:
           if [ -n "${{ github.event.inputs.version }}" ]; then
             echo "value=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
           else
-            TAG=$(curl -sL "https://api.github.com/repos/zosmaai/zosma-cowork/releases/latest" | \
+            TAG=$(curl -sL -H "Authorization: Bearer ${GH_TOKEN}" "https://api.github.com/repos/zosmaai/zosma-cowork/releases/latest" | \
               python3 -c "import json,sys;d=json.load(sys.stdin);print(d.get('tag_name','').lstrip('v'))" 2>/dev/null || echo "")
             if [ -z "$TAG" ]; then
               echo "Failed to fetch latest release"
