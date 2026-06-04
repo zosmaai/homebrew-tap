@@ -1,6 +1,6 @@
 cask "zosma-cowork" do
-  version "0.13.1"
-  sha256 "ddcf8038bea3681a825fb02bb61ccec7de9f49c66737a91869bbaaacd0177ee6"
+  version "0.14.0"
+  sha256 "82a2caffba6e1a6b3e7d134bfde0b5883d2fddb4dc817b78f83f4a17a92085ca"
 
   url "https://github.com/zosmaai/zosma-cowork/releases/download/v#{version}/zosma-cowork_#{version}_universal.dmg",
       verified: "github.com/zosmaai/zosma-cowork/"
