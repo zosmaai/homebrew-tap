@@ -2,9 +2,14 @@
 """Update the cask formula with a new version, DMG names, and SHA256s.
 
 Usage:
-  python3 .github/scripts/update-cask.py <cask-file> <version> <arm-dmg> <intel-dmg> <arm-sha256> <intel-sha256>
+  python3 .github/scripts/update-cask.py <cask-file> <version> <arm-dmg> <intel-dmg> <arm-sha256> <intel-sha256> [release-tag]
 
 Args are strings — use empty string '' for missing values.
+
+<release-tag> is the exact GitHub release tag (e.g. "v0.14.0" or "0.15.0").
+It is written verbatim into the download URL path so the cask works whether or
+not the tag carries a leading "v". Defaults to "v<version>" for backwards
+compatibility.
 """
 import os
 import re
@@ -18,6 +23,7 @@ def main():
     intel_dmg = sys.argv[4]
     sha256_arm = sys.argv[5]
     sha256_intel = sys.argv[6]
+    tag = sys.argv[7] if len(sys.argv) > 7 and sys.argv[7] else f"v{version}"
 
     with open(cask_file) as f:
         content = f.read()
@@ -31,12 +37,14 @@ def main():
         flags=re.MULTILINE,
     )
 
-    # Build URL template from the primary DMG name
+    # Build URL template from the primary DMG name. The release tag is written
+    # verbatim into the path segment (NOT assumed to be "v#{version}"), so this
+    # works for both "v0.14.0" and bare "0.15.0" style tags.
     primary_dmg = arm_dmg or intel_dmg
     url_filename = primary_dmg.replace(version, "#{version}")
     content = re.sub(
-        r'(/download/v)#\{version\}/[^")\s]+',
-        rf'\1#{{version}}/{url_filename}',
+        r'(/releases/download/)[^/"]+/[^")\s]+',
+        rf'\g<1>{tag}/{url_filename}',
         content,
         count=1,
     )

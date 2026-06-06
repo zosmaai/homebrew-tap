@@ -27,16 +27,29 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ -n "${{ github.event.inputs.version }}" ]; then
-            echo "value=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+            REQ="${{ github.event.inputs.version }}"
+            # Resolve the real tag: a release may be tagged "v0.15.0" or bare "0.15.0".
+            TAG=""
+            for cand in "$REQ" "v${REQ#v}" "${REQ#v}"; do
+              if curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+                "https://api.github.com/repos/zosmaai/zosma-cowork/releases/tags/${cand}" >/dev/null 2>&1; then
+                TAG="$cand"; break
+              fi
+            done
+            [ -z "$TAG" ] && TAG="v${REQ#v}"
           else
+            # Use the latest release's tag verbatim (do NOT strip the leading v here).
             TAG=$(curl -sL -H "Authorization: Bearer ${GH_TOKEN}" "https://api.github.com/repos/zosmaai/zosma-cowork/releases/latest" | \
-              python3 -c "import json,sys;d=json.load(sys.stdin);print(d.get('tag_name','').lstrip('v'))" 2>/dev/null || echo "")
+              python3 -c "import json,sys;print(json.load(sys.stdin).get('tag_name',''))" 2>/dev/null || echo "")
             if [ -z "$TAG" ]; then
               echo "Failed to fetch latest release"
               exit 1
             fi
-            echo "value=$TAG" >> "$GITHUB_OUTPUT"
           fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag=$TAG version=$VERSION"
 
       - name: Check current cask version
         id: current
@@ -54,59 +67,56 @@ jobs:
       - name: Find and download DMG assets
         id: dmg
         env:
-          VERSION: ${{ steps.version.outputs.value }}
+          TAG: ${{ steps.version.outputs.tag }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ASSETS_JSON=$(curl -sL -H "Authorization: Bearer ${GH_TOKEN}" \
-            "https://api.github.com/repos/zosmaai/zosma-cowork/releases/tags/v${VERSION}")
-          # Debug: show first API response key to verify auth worked
+            "https://api.github.com/repos/zosmaai/zosma-cowork/releases/tags/${TAG}")
           echo "API keys: $(echo "$ASSETS_JSON" | python3 -c "import json,sys;print(list(json.load(sys.stdin).keys()))" 2>/dev/null || echo 'parse_failed')"
-          PYCMD='import json,sys;a=json.load(sys.stdin).get("assets",[]);d=[n for n in [x["name"] for x in a] if n.endswith(".dmg")'
+
+          # pick <python-predicate-on-n> -> prints "<name>\t<browser_download_url>" for
+          # the first matching .dmg asset, or empty. Using the API-provided
+          # browser_download_url means we never have to guess the tag/url shape.
+          pick() {
+            echo "$ASSETS_JSON" | python3 -c "import json,sys; a=json.load(sys.stdin).get('assets',[]); m=[x for x in a for n in [x['name']] if n.endswith('.dmg') and ($1)]; print(m[0]['name']+'\t'+m[0]['browser_download_url'] if m else '')"
+          }
 
           # First check for universal DMG (single build for Apple Silicon + Intel)
-          UNIVERSAL_DMG=$(echo "$ASSETS_JSON" | python3 -c "${PYCMD} and (\"universal\" in n)];print(d[0] if d else \"\")")
-
-          if [ -n "$UNIVERSAL_DMG" ]; then
-            echo "Found universal DMG: $UNIVERSAL_DMG (single build for Apple Silicon + Intel)"
-            echo "arm_dmg=$UNIVERSAL_DMG" >> "$GITHUB_OUTPUT"
-
-            echo "Downloading DMG: $UNIVERSAL_DMG"
-            curl -sL -o zosma-cowork-universal.dmg \
-              "https://github.com/zosmaai/zosma-cowork/releases/download/v${VERSION}/${UNIVERSAL_DMG}"
+          UNIVERSAL=$(pick '"universal" in n')
+          if [ -n "$UNIVERSAL" ]; then
+            NAME="${UNIVERSAL%%$'\t'*}"; URL="${UNIVERSAL#*$'\t'}"
+            echo "Found universal DMG: $NAME (single build for Apple Silicon + Intel)"
+            echo "arm_dmg=$NAME" >> "$GITHUB_OUTPUT"
+            curl -sL -o zosma-cowork-universal.dmg "$URL"
             SHA256_UNIVERSAL=$(shasum -a 256 zosma-cowork-universal.dmg | cut -d ' ' -f 1)
             echo "arm_sha256=$SHA256_UNIVERSAL" >> "$GITHUB_OUTPUT"
             echo "Universal SHA256: $SHA256_UNIVERSAL"
           else
             # Fall back to architecture-specific DMG detection (legacy releases)
-
-            # Find ARM DMG
-            ARM_DMG=$(echo "$ASSETS_JSON" | python3 -c "${PYCMD} and (\"aarch64\" in n or \"arm64\" in n)];print(d[0] if d else \"\")")
-            echo "arm_dmg=$ARM_DMG" >> "$GITHUB_OUTPUT"
-
-            if [ -n "$ARM_DMG" ]; then
-              echo "Downloading ARM DMG: $ARM_DMG"
-              curl -sL -o zosma-cowork-arm64.dmg \
-                "https://github.com/zosmaai/zosma-cowork/releases/download/v${VERSION}/${ARM_DMG}"
+            ARM=$(pick '"aarch64" in n or "arm64" in n')
+            if [ -n "$ARM" ]; then
+              NAME="${ARM%%$'\t'*}"; URL="${ARM#*$'\t'}"
+              echo "arm_dmg=$NAME" >> "$GITHUB_OUTPUT"
+              echo "Downloading ARM DMG: $NAME"
+              curl -sL -o zosma-cowork-arm64.dmg "$URL"
               SHA256_ARM=$(shasum -a 256 zosma-cowork-arm64.dmg | cut -d ' ' -f 1)
               echo "arm_sha256=$SHA256_ARM" >> "$GITHUB_OUTPUT"
               echo "ARM SHA256: $SHA256_ARM"
             else
-              echo "No ARM DMG found in release v${VERSION}"
+              echo "No ARM DMG found in release ${TAG}"
             fi
 
-            # Find Intel DMG
-            INTEL_DMG=$(echo "$ASSETS_JSON" | python3 -c "${PYCMD} and (\"x64\" in n or \"amd64\" in n or \"intel\" in n.lower())];print(d[0] if d else \"\")")
-            echo "intel_dmg=$INTEL_DMG" >> "$GITHUB_OUTPUT"
-
-            if [ -n "$INTEL_DMG" ]; then
-              echo "Downloading Intel DMG: $INTEL_DMG"
-              curl -sL -o zosma-cowork-x64.dmg \
-                "https://github.com/zosmaai/zosma-cowork/releases/download/v${VERSION}/${INTEL_DMG}"
+            INTEL=$(pick '"x64" in n or "amd64" in n or "intel" in n.lower()')
+            if [ -n "$INTEL" ]; then
+              NAME="${INTEL%%$'\t'*}"; URL="${INTEL#*$'\t'}"
+              echo "intel_dmg=$NAME" >> "$GITHUB_OUTPUT"
+              echo "Downloading Intel DMG: $NAME"
+              curl -sL -o zosma-cowork-x64.dmg "$URL"
               SHA256_INTEL=$(shasum -a 256 zosma-cowork-x64.dmg | cut -d ' ' -f 1)
               echo "intel_sha256=$SHA256_INTEL" >> "$GITHUB_OUTPUT"
               echo "Intel SHA256: $SHA256_INTEL"
             else
-              echo "No Intel DMG found in release v${VERSION}"
+              echo "No Intel DMG found in release ${TAG}"
             fi
           fi
 
@@ -119,6 +129,7 @@ jobs:
       - name: Update Cask formula
         env:
           VERSION: ${{ steps.version.outputs.value }}
+          TAG: ${{ steps.version.outputs.tag }}
           ARM_DMG: ${{ steps.dmg.outputs.arm_dmg }}
           INTEL_DMG: ${{ steps.dmg.outputs.intel_dmg }}
           SHA256_ARM: ${{ steps.dmg.outputs.arm_sha256 }}
@@ -130,7 +141,8 @@ jobs:
             "$ARM_DMG" \
             "$INTEL_DMG" \
             "$SHA256_ARM" \
-            "$SHA256_INTEL"
+            "$SHA256_INTEL" \
+            "$TAG"
 
       - name: Commit and push
         run: |
