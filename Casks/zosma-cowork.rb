@@ -1,8 +1,8 @@
 cask "zosma-cowork" do
-  version "0.16.7"
-  sha256 "841c2fcf28ab39091ccd7b30c96c53e19e818bf283ec0c9baa100bd0d2c77b7c"
+  version "0.16.9"
+  sha256 "e5e96654530262f42dac20f6f1e2f692ef845bb53d201588145640cbf14d8df2"
 
-  url "https://github.com/zosmaai/zosma-cowork/releases/download/v0.16.7/zosma-cowork_#{version}_universal.dmg",
+  url "https://github.com/zosmaai/zosma-cowork/releases/download/v0.16.9/zosma-cowork_#{version}_universal.dmg",
       verified: "github.com/zosmaai/zosma-cowork/"
   name "zosma-cowork"
   desc "Desktop AI coworker built on the pi coding agent — streaming, thinking, tool calls"
